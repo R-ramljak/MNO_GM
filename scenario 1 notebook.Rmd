@@ -1,0 +1,139 @@
+---
+title: "R Notebook"
+author: "Giulia and Marco"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE}
+library(tidyverse)
+library(data.table)
+library(sf)
+library(lubridate)
+library(raster)
+
+set.seed(762)
+```
+
+
+
+# Loading in / cleaning census data from  Germany
+For this version census data from Germany was retrieved. This data entails population count categories on the 1km*1km tile level. Additional meta information such as age proportions etc. are included and will be utilized in subsequent versions. Furthermore, for computational reasons, this version will only focus on a subset of the tiles located in the state of Bavaria. However, the code is written in a modularized way in order to easily scale, once a high computing machine is available.     
+In the following chunk this census data is cleaned and random (realistic) values for the population count variable are generated instead of the categorical scale. These random values are based on the relevant category the respective tile entails. Furthermore, this population value is used throughout this version as the number of mobile phones in a specific tile. This means, this variable represents the u vector in the working paper. In subsequent versions this original population value will be adjusted based on auxiliary variables to get a more realistic count of people with mobile phones in the tile area.
+```{r}
+census.raw <- read_csv2("Data/Census data Germany/Zensus 1km.csv")
+census.de.1km <- census.raw %>% 
+  dplyr::select(x = x_mp_1km, y = y_mp_1km, tile.id = Gitter_ID_1km, pop = Einwohner) %>% 
+  mutate(internal.id = row_number()) %>% 
+  mutate(pop = case_when(pop == 1 ~ sample(1:250, n(), replace = T),
+                         pop == 2 ~ sample(250:500, n(), replace = T),
+                         pop == 3 ~ sample(500:2000, n(), replace = T),
+                         pop == 4 ~ sample(2000:4000, n(), replace = T),
+                         pop == 5 ~ sample(4000:8000, n(), replace = T),
+                         pop == 6 ~ sample(8000:12000, n(), replace = T),
+                         pop == "-1" ~ as.integer(1)))
+
+# Filtering only tiles within specified bounding box, creating tile polygons and transforming the object to an sf object with a specific coordinate reference system (projection)
+census.de.1km.tile <- census.de.1km %>% 
+  filter(between(y, 2800000, 2850000),
+         between(x, 4500000, 4600000)) %>%
+  rasterFromXYZ(crs = st_crs(3035)$proj4string) %>% 
+  rasterToPolygons() %>%
+  st_as_sf() %>% 
+  st_transform(crs = 3035) 
+
+
+# Bounding box of focus area
+focus.bb <- data.frame(maxlat = 4600000, minlat = 4300000,
+                       maxlong = 2850000, minlong = 2650000)
+
+# Focusing on the area within the bounding box (south bavaria)
+census.de.1km %>% 
+  sample_n(10000) %>% 
+  ggplot() +
+  geom_point(aes(x = x, y = y)) +
+  geom_rect(data = focus.bb, aes(ymin = minlong, ymax = maxlong, 
+                                 xmin = minlat, xmax = maxlat), 
+            color = "red", fill = "transparent") +
+  ggtitle("Focusing on the area within the bounding box (south Bavaria")
+  
+
+# Focus area
+census.de.1km.tile %>% 
+  ggplot() +
+  geom_sf(aes(fill = pop)) +
+  ggtitle("South Bavaria 1km*1km tiles")
+
+# Histograms of population distribution
+census.de.1km.tile %>% 
+  ggplot() +
+  geom_histogram(aes(pop)) +
+  ggtitle("Number of mobile phone distribution per tile")
+
+```
+
+# Generation of radio network
+For the generation of the radio network, real cell tower location data for Germany was found on the internet (cite source). This data is loaded in and cleaned (Creation of IDs and cropped to South Bavaria). A map is shown where the cell towers are located.
+```{r}
+
+# define illumnation intensity sij for each tile 
+
+
+## Generation of radio network ###
+# Real data concerning cell towers in Germany
+cell.tower.hilzen.raw <- read.csv("https://raw.githubusercontent.com/dahilzen/Mobilfunk-Scrape/master/Alle_Funkmasten_BRD.csv")
+cell.tower.position <- cell.tower.hilzen.raw %>% 
+  rename(tower.id = fID) %>% 
+  filter(type == "Mobilfunk") %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = st_crs(4326)$proj4string) %>% 
+  st_transform(crs = 3035) %>% 
+  st_crop(xmin = 4500000, xmax = 4600000,
+          ymin = 2800000, ymax = 2850000) # filtering based on boundary box
+
+
+# mapping cell towers on census map
+census.de.1km.tile %>% 
+  ggplot() +
+  geom_sf(aes(fill = pop)) +
+  geom_sf(data = cell.tower.position, col = "red", size = 0.4) +
+  ggtitle("Location of cell towers (red dots)")
+# one can see that cell towers cluster, where it is more urban
+```
+
+This data only entails the cell tower position, however, there is indication concerning the number of antennas per cell tower, nor antenna specific characteristics such as direction, tilt, coverage area or signal strength. In subsequent versions these variables will be further generated in order to derive a realistic scenario. Currently, it is assumed that there is only one antenna per cell tower and this antenna has a coverage area based on Voronoi tesselation. This means that coverage areas do not overlap. However, again, the code is very easy adjustable to integrate more variables. This part ends with a map, presenting the tiles from South Bavaria and the respective coverage areas as polygons. This means one can see which tiles are captured within which coverage area (Device-to-cell association). 
+```{r}
+# Defining the coverage area
+# TO DO: create multiple cells per tower
+radio.cells <- cell.tower.position %>% 
+  # slice(rep(1:n(), each = 3)) %>% 
+  mutate(universal.id = paste0("RC.", row_number())) # %>% 
+  # group_by(tower.id) %>% 
+  # mutate(tower.cell.id = paste0("T.RC.", row_number()))
+
+
+# Option with Voronoi tesselation
+# Coverage area is dataframe with radio cells in the rows and their geometries constituting their respective coverage area
+# random.cell.vec <- sample(nrow(radio.cells))
+# TO DO: create overlapping coverage areas
+# TO DO: Implement signaling strength, currently uniform
+coverage.areas <- radio.cells %>% 
+  st_union() %>% # unite them
+  st_voronoi() %>% # and perform the voronoi tessellation
+  st_collection_extract(type = "POLYGON") %>% # select the polygons
+  st_sf(crs = 3035) %>% 
+  st_crop(xmin = 4500000, xmax = 4600000,
+          ymin = 2800000, ymax = 2850000) %>% 
+  st_join(radio.cells) %>% # & re-connect the data items
+  st_set_agr("aggregate") %>%  # clean up
+  mutate(signal.str = 1) # uniform
+  
+# Overlaying the coverage areas with the census data (Device to cell association)
+coverage.areas %>% 
+  ggplot() +
+  geom_sf(data = census.de.1km.tile, aes(fill = pop)) +
+  geom_sf(col = 'red', fill = NA) +
+  ggtitle("Device-to-cell association", "Non-overlapping Voronoi Tesselation")
+  
+```
+
