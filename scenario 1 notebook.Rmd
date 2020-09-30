@@ -1,5 +1,5 @@
 ---
-title: "R Notebook"
+title: "Estimating present population based on Mobile Network Operator data - a simulation study"
 author: "Giulia and Marco"
 output:
   html_document:
@@ -12,6 +12,7 @@ library(data.table)
 library(sf)
 library(lubridate)
 library(raster)
+library(Matrix)
 
 set.seed(762)
 ```
@@ -56,7 +57,7 @@ census.de.1km %>%
   geom_rect(data = focus.bb, aes(ymin = minlong, ymax = maxlong, 
                                  xmin = minlat, xmax = maxlat), 
             color = "red", fill = "transparent") +
-  ggtitle("Focusing on the area within the bounding box (south Bavaria")
+  ggtitle("Focusing on the area within the bounding box (South Bavaria)")
   
 
 # Focus area
@@ -73,7 +74,7 @@ census.de.1km.tile %>%
 
 ```
 
-# Generation of radio network
+# Generation of the Radio Network
 For the generation of the radio network, real cell tower location data for Germany was found on the internet (cite source). This data is loaded in and cleaned (Creation of IDs and cropped to South Bavaria). A map is shown where the cell towers are located.
 ```{r}
 
@@ -101,13 +102,17 @@ census.de.1km.tile %>%
 # one can see that cell towers cluster, where it is more urban
 ```
 
-This data only entails the cell tower position, however, there is indication concerning the number of antennas per cell tower, nor antenna specific characteristics such as direction, tilt, coverage area or signal strength. In subsequent versions these variables will be further generated in order to derive a realistic scenario. Currently, it is assumed that there is only one antenna per cell tower and this antenna has a coverage area based on Voronoi tesselation. This means that coverage areas do not overlap. However, again, the code is very easy adjustable to integrate more variables. This part ends with a map, presenting the tiles from South Bavaria and the respective coverage areas as polygons. This means one can see which tiles are captured within which coverage area (Device-to-cell association). 
+This data only entails the cell tower position, however, there is no indication concerning the number of antennas per cell tower, nor antenna specific characteristics such as direction, tilt, coverage area or signal strength. In order to derive a more realistic scenario some of these parameters will be implemented in subsequent versions. Signal strength will be simulated in a later stage of this document. Currently, it is assumed that there is only one antenna per cell tower and this antenna has a coverage area based on Voronoi tesselation (Alternative 1, non-overlapping coverage areas) or on differing sized buffers (Alternative 2, possibly overlapping coverage areas). However, again, the code is very easy adjustable to integrate more variables. This part ends with a map, presenting the tiles from South Bavaria and the respective coverage areas as polygons. This means one can see which tiles are captured within which coverage area (Device-to-cell association).
+
+
+### Alternative 1: Voronoi tesselation --> non overlapping polygons
 ```{r}
 # Defining the coverage area
 # TO DO: create multiple cells per tower
 radio.cells <- cell.tower.position %>% 
   # slice(rep(1:n(), each = 3)) %>% 
-  mutate(universal.id = paste0("RC.", row_number())) # %>% 
+  mutate(universal.id = paste0("RC.", row_number())) %>%
+  mutate(cell.centroid = st_centroid(geometry))
   # group_by(tower.id) %>% 
   # mutate(tower.cell.id = paste0("T.RC.", row_number()))
 
@@ -137,3 +142,78 @@ coverage.areas %>%
   
 ```
 
+
+
+### Alternative 2: Random Buffering --> Overlapping polygons
+Here the coverage area depends on a 5 category scale which currently is assigned to each radio cell randomly. Each category entails a different polygon size representing the coverage area. This coverage area currently always has the location of its radio cell as its centroid. Due to differing sizes, coverage areas can overlap, meaning that tiles can be "illuminated" by multiple radio cells.
+```{r}
+# random vector, which radio cell should get which size of coverage area
+# TO DO: instead of random categories there should be a model underneath this, such as differences between urban and rural areas, etc..
+random.vec <- sample(c(1:5), length(radio.cells$tower.id), replace = T)
+buffer.cat <- c("1" = 500, "2" = 700, "3" = 1000, "4" = 2000, "5" = 3000)
+
+coverage.areas.over <- radio.cells %>% 
+  mutate(random.vec = random.vec) %>% 
+  split(.$random.vec) %>% 
+  map2_df(., buffer.cat, ~st_buffer(.x, .y)) %>% 
+  st_sf(., crs = 3035) %>% 
+  st_crop(xmin = 4500000, xmax = 4600000,
+          ymin = 2800000, ymax = 2850000) %>% 
+  st_set_agr("aggregate") %>%  # clean up
+  mutate(cell.centroid = st_centroid(geometry))
+
+
+coverage.areas.over %>% 
+  ggplot() +
+  geom_sf(data = census.de.1km.tile, aes(fill = pop)) +
+  geom_sf(col = 'red', fill = NA) +
+  ggtitle("Device-to-cell association", "Overlapping, different size coverage areas")
+```
+
+
+# Device-to-cell association 
+In this module tiles (also mobile devices) and coverage areas are connected. We are interested which tiles (meaning which cell phones in a generic tile) can receive a signal from which radio cell(s). One could also ask, which radio cell "illuminates" which tile(s). Furthermore, to make this scenario more realistic, we will zoom in to the level of mobile devices, meaning disaggregating the `pop` variable by approximation. This is particularly important when multiple radio cells illuminate a generic tile. Given the possibly different signal strengths of the respective radio cells for this tile, a probability can be calculated for the mobile devices within the tile, which describes the probability of a mobile device being logged in to a specific radio cell. This probability depends on the radio specific signal strength for this tile which currently is a function dependening on the distance between the tile centroid of the mobile device and the centroid of the radio cell. (Insert formula).    
+
+`dev.to.cell` calculates the tile specific signal strength to every relevant radio cell and the probabilities p (`weight.pij`), defined in the working paper. `P.mat` represents the matrix P, defined in the working paper, as a sparse matrix. The rows are the tiles, the columns are the radio cells and the matrix is populated with the probabilities `weight.pij`. `U.vec` represents the population column vector. `C.vec` entails the stochastic process which cell phone of a specific tile estimated to be logged in to which radio cell. This info again can be aggreagted to population counts within a radio cell. The estimated population total cannot exceed the true population total because it is insured that no cell phone is logged into multiple radio cells at the same time.
+```{r}
+dev.to.cell <- census.de.1km.tile %>% 
+  mutate(tile.centroid = st_centroid(geometry)) %>%
+  st_join(coverage.areas.over, left = F) %>% 
+  mutate(dist.sij = st_distance(cell.centroid, tile.centroid, by_element = T)) %>% 
+  mutate(signal.sij = 1 / (dist.sij * random.vec)) %>% # dependent threshold value
+  group_by(internal.id) %>%
+  mutate(weight.pij = as.numeric(signal.sij / sum(signal.sij, na.rm = T))) 
+
+# sparse matrix of device to cell
+P.mat <- dev.to.cell %>% 
+  dplyr::select(internal.id, universal.id, weight.pij) %>% 
+  st_drop_geometry() %>% 
+  pivot_wider(id_cols = universal.id, names_from = internal.id, 
+              values_from = weight.pij) %>% 
+  as.matrix() %>% 
+  Matrix(sparse = T)
+
+# u-vector
+U.vec <- census.de.1km.tile %>% 
+  dplyr::select(internal.id, pop)
+
+# C-vector (total count of mobile phones of a tile stochastically assigned to a radio cell based on P --> here: weight.pij)
+C.vec <- dev.to.cell %>% 
+  dplyr::select(internal.id, universal.id, pop, weight.pij) %>% 
+  st_drop_geometry() %>%
+  split(.$internal.id) %>% 
+  map(~sample(x = .$universal.id, mean(.$pop),
+                              replace = T, prob = .$weight.pij)) %>% 
+  map(as_tibble, .id = "internal.id") %>% 
+  map(~group_by(., value)) %>% 
+  map(~summarise(., pop.count.rand = n(), .groups = "drop"))
+# TO DO: Implement example of the stochastic process
+```
+
+## Current questions:
+* **Is there a difference between an antenna and a radio cell?**     
+* **What is the difference between the module "Generation of radio network" and the module "Network modelling" in the working paper**    
+* **What is meant with seeds**    
+
+## Major TO DOs:
+**Implement a "scenario table" which acts as a vignette for every scenario and which parameters are specified**
