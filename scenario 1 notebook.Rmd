@@ -1,6 +1,6 @@
 ---
 title: "Estimating present population based on Mobile Network Operator data - a simulation study"
-author: "Giulia and Marco"
+author: "Stefania, Giulia, Tony, Marco"
 output:
   html_document:
     df_print: paged
@@ -13,16 +13,25 @@ library(sf)
 library(lubridate)
 library(raster)
 library(Matrix)
+library(tmap)
+library(knitr)
+library(kableExtra)
 
 set.seed(762)
 ```
 
+In this study we will evaluate and compare different estimation techniques to infer the "present population" in a specific region. Present population "is composed by all individuals who are physically present in the geographic area of interest at a selected reference time" (cite Fabio). The following will be a simulation study partly based on real data and simulated data. Certain assumptions are made that will be made transparent throughout the notebook.
 
+The first part focuses on drafting the scenario. ...
 
-# Loading in / cleaning census data from  Germany
-For this version census data from Germany was retrieved. This data entails population count categories on the 1km*1km tile level. Additional meta information such as age proportions etc. are included and will be utilized in subsequent versions. Furthermore, for computational reasons, this version will only focus on a subset of the tiles located in the state of Bavaria. However, the code is written in a modularized way in order to easily scale, once a high computing machine is available.     
-In the following chunk this census data is cleaned and random (realistic) values for the population count variable are generated instead of the categorical scale. These random values are based on the relevant category the respective tile entails. Furthermore, this population value is used throughout this version as the number of mobile phones in a specific tile. This means, this variable represents the u vector in the working paper. In subsequent versions this original population value will be adjusted based on auxiliary variables to get a more realistic count of people with mobile phones in the tile area.
-```{r}
+# Loading in / cleaning census data from Germany
+
+Census data from Germany was retrieved (<https://www.destatis.de/EN/Home/_node.html>). This data entails population count categories on the 1km\*1km tile level. Additional meta information such as age proportions etc. are included and will be utilized in subsequent versions. For computational reasons, this version will only focus on a subset of the tiles located in the state of Bavaria. Especially, this area comprises both urban and rural areas. The code is written in a modularized way in order to easily scale to the whole area of Germany, once a high computing machine is available.\
+For statistical disclosure reasons every tile only entails a 6 level categorical population count variable. In the following chunk this census data is cleaned and random(realistic) values for the population count variable are generated instead in order to replace the categories. In particular, we created the variable `pop` that samples a random-realistic value for each tile based within the category's range; the categories are 1 = [1:250], 2 = [250:500], 3 = [500:2000], 4 = [2000:4000], 5 = [4000:8000], 6 = [8000:12000].
+
+This sampled population value is used throughout this version as the number of mobile phones in a specific tile. This means, this variable represents the `u` vector in the working paper. In subsequent versions this original population value will be adjusted based on auxiliary variables to get a more realistic count of people with mobile phones in the tile area.
+
+```{r message=FALSE}
 census.raw <- read_csv2("Data/Census data Germany/Zensus 1km.csv")
 census.de.1km <- census.raw %>% 
   dplyr::select(x = x_mp_1km, y = y_mp_1km, tile.id = Gitter_ID_1km, pop = Einwohner) %>% 
@@ -40,7 +49,7 @@ census.de.1km <- census.raw %>%
 # Filtering only tiles within specified bounding box, creating tile polygons and transforming the object to an sf object with a specific coordinate reference system (projection)
 census.de.1km.tile <- census.de.1km %>% 
   filter(between(y, 2800000, 2850000), # 285
-         between(x, 4500000, 4600000)) %>%
+         between(x, 4400000, 4600000)) %>%
     # filter(between(y, 2650000, 3000000), # 285
     #      between(x, 4300000, 4600000)) %>%
   rasterFromXYZ(crs = st_crs(3035)$proj4string) %>% 
@@ -50,13 +59,23 @@ census.de.1km.tile <- census.de.1km %>%
   mutate(pop.category = case_when(pop %in% c("-1", 1, 2, 3, 4) ~ "rural",
                                   pop %in% c(5) ~ "suburban",
                                   pop %in% c(6) ~ "urban"))
+```
 
+In the following section the aim is to highlight only a specific area of Germany that we are going to study: South Bavaria. For illustration purposes, a random group of tiles (n = 10000) is selected in order to show the shape of the area analysed within Germany. In Figure 1, each random tile is represented by a black dot.
 
+```{r}
 # Bounding box of focus area
 # focus.bb <- data.frame(maxlat = 4600000, minlat = 4300000,
 #                        maxlong = 3000000, minlong = 2650000)
-focus.bb <- data.frame(maxlat = 4600000, minlat = 4300000,
-                       maxlong = 2850000, minlong = 2650000)
+bb.focus.dat <- data.frame(xmin = 4400000, xmax = 4600000,
+                           ymin = 2800000, ymax = 2850000)
+bb.focus.vec <- c(xmin = 4400000, xmax = 4600000,
+                  ymin = 2800000, ymax = 2850000)
+# bb.focus.dat <- data.frame(xmin = 4300000, xmax = 4600000,
+#                            ymin = 2650000, ymax = 3000000)
+# bb.focus.vec <- c(xmin = 4300000, xmax = 4600000,
+#                   ymin = 2650000, ymax = 3000000)
+
 
 
 # Focusing on the area within the bounding box (south bavaria)
@@ -64,31 +83,35 @@ census.de.1km %>%
   sample_n(10000) %>% 
   ggplot() +
   geom_point(aes(x = x, y = y)) +
-  geom_rect(data = focus.bb, aes(ymin = minlong, ymax = maxlong, 
-                                 xmin = minlat, xmax = maxlat), 
-            color = "red", fill = "transparent") +
-  ggtitle("Focusing on the area within the bounding box (South Bavaria)")
-  
+  geom_rect(data = bb.focus.dat, aes(ymin = ymin, ymax = ymax, 
+                                     xmin = xmin, xmax = xmax), 
+            color = "red", size = 2, fill = "transparent") +
+  ggtitle("Figure 1: Focusing on the area within the bounding box (South Bavaria)")
+```
 
-# Focus area
-census.de.1km.tile %>% 
+Figure 2 shows the distribution of the population for the focus area. There are a scale of 8 colors representing the different population densities in the area of interest. (This will be later on adjusted with the following figure, representing the log CDF.) Looking at the figure, the major part of the territory has a population count below 2000; there are two evident urban agglomeration that correspond to Munich and Nuremberg. Focusing on these urban areas, a single tile can contain up to 8,000 people.
+
+```{r}
+tm_shape(census.de.1km.tile) + tm_fill(col = "pop", n = 10) + tm_layout(title = "Figure 2: South Bavaria 1km*1km tiles", legend.position = c("right","bottom"))
+```
+
+(Figure 3 will be adjusted and interpreted at a later stage.)
+
+```{r}
+# ECDF of population distribution
+census.de.1km.tile %>%
+  arrange(log(pop)) %>% 
+  mutate(rn = row_number()) %>% 
   ggplot() +
-  geom_sf(aes(fill = pop)) +
-  ggtitle("South Bavaria 1km*1km tiles")
-
-# Histograms of population distribution
-census.de.1km.tile %>% 
-  ggplot() +
-  geom_histogram(aes(pop)) +
-  ggtitle("Number of mobile phone distribution per tile")
-
+  geom_step(aes(x = log(pop), y = rn)) +
+  ggtitle("Figure 3: Number of mobile phone distribution per tile")
 ```
 
 # Generation of the Radio Network
-```{r}
-bb.antenna <- c(xmin = 4500000, xmax = 4600000,
-                ymin = 2800000, ymax = 2850000)
 
+At this stage we have a focus area, which is divided into about 10.000 1km\*1km tiles. For every tile there is a valid population count value available. The following code chunk will generate our radio network, which is composed of three layers, according to Fabios suggestion (cite .ppt). Each layer represents a set of cell towers that entail each 3 antennas. Each antenna is directed into a different direction (120 degrees) therefore illuminating the area around the tower with cell signal. The coverage area of an antenna overlaps to some degree with the coverage area of an antenna of the same tower as well as with the coverage areas of antennas from different towers. The towers of each layer follow a hexagonal structure. The difference between each layer is the type of area they are located in: rural, suburban, urban (depending on the population value of the census data). The first layer covers the complete focus area (rural, suburban and urban), each antenna has a circular coverage area with a radius of 4000m. The second layer covers the suburban and urban tiles, each antenna has a circular coverage area with a radius of 2000m and they are rotated 35 degrees counter clock wise in terms of the antennas of the first layer. The third layer covers only the urban tiles, each antenna has a circular coverage area with a radius of 500m and they are rotated again 35 degrees counter clock wise in terms of the antennas of the second layer. (Note: The circular coverage areas will be replaced with ellipses; the tower-to-tower distance within each layer have differing distances to each other, meaning the towers in the third layer (urban) are closer to each other, more dense, then in the first and second layer). There are many parameters that can be readjusted at a later stage. Furthermore, the code in this chunk will be rewritten in a more modular and compact way.
+
+```{r}
 layer.1 <- st_make_grid(census.de.1km.tile, cellsize = 10000, square = F) # different cell size (qm)
 antenna.1 <- layer.1 %>% 
   st_coordinates() %>% 
@@ -98,7 +121,7 @@ antenna.1 <- layer.1 %>%
   mutate(tower.ID = paste0("RT", 1:n())) %>% 
   slice(rep(1:n(), each = 3)) %>% 
   group_by(tower.ID) %>% 
-  mutate(antenna.ID = paste("A", tower.ID, 1:3, sep = ".")) %>% 
+  mutate(antenna.ID = paste(tower.ID, "A", 1:3, sep = ".")) %>% 
   ungroup() %>% 
   mutate(antenna.kind = str_sub(antenna.ID, -1)) %>% 
   mutate(X = case_when(str_sub(antenna.ID, -1) == "1" ~ X - 0,
@@ -110,9 +133,10 @@ antenna.1 <- layer.1 %>%
   st_as_sf(coords = c("X", "Y")) %>% 
   st_buffer(4000) %>% # 4000 m radius coverage are per antenna
   st_sf(., crs = 3035) %>% 
-  st_crop(bb.antenna) %>% 
+  st_crop(bb.focus.vec) %>% 
   st_set_agr("aggregate") %>% # clean up
-  mutate(cell.centroid = st_centroid(geometry))
+  mutate(cell.centroid = st_centroid(geometry)) %>% 
+  mutate(area.kind = "Rural")
 
 rotation = function(a){
   r = a * pi / 180 #degrees to radians
@@ -135,7 +159,7 @@ antenna.2 <- layer.2 %>%
   mutate(tower.ID = paste0("ST", 1:n())) %>% 
   slice(rep(1:n(), each = 3)) %>% 
   group_by(tower.ID) %>% 
-  mutate(antenna.ID = paste("A", tower.ID, 1:3, sep = ".")) %>% 
+  mutate(antenna.ID = paste(tower.ID, "A", 1:3, sep = ".")) %>% 
   ungroup() %>% 
   mutate(antenna.kind = str_sub(antenna.ID, -1)) %>% 
   mutate(X = case_when(str_sub(antenna.ID, -1) == "1" ~ X - 0,
@@ -147,9 +171,10 @@ antenna.2 <- layer.2 %>%
   st_as_sf(coords = c("X", "Y")) %>% 
   st_buffer(2000) %>% # 6000 m radius coverage are per antenna
   st_sf(., crs = 3035) %>% 
-  st_crop(bb.antenna) %>% 
+  st_crop(bb.focus.vec) %>% 
   st_set_agr("aggregate") %>%  # clean up
-  mutate(cell.centroid = st_centroid(geometry))
+  mutate(cell.centroid = st_centroid(geometry)) %>% 
+  mutate(area.kind = "Suburban")
 
 layer.3.geo <- census.de.1km.tile %>% 
   filter(pop.category %in% c("urban")) %>% 
@@ -166,7 +191,7 @@ antenna.3 <- layer.3 %>%
   mutate(tower.ID = paste0("UT", 1:n())) %>% 
   slice(rep(1:n(), each = 3)) %>% 
   group_by(tower.ID) %>% 
-  mutate(antenna.ID = paste("A", tower.ID, 1:3, sep = ".")) %>% 
+  mutate(antenna.ID = paste(tower.ID, "A", 1:3, sep = ".")) %>% 
   ungroup() %>% 
   mutate(antenna.kind = str_sub(antenna.ID, -1)) %>% 
   mutate(X = case_when(str_sub(antenna.ID, -1) == "1" ~ X - 0,
@@ -176,57 +201,75 @@ antenna.3 <- layer.3 %>%
                        str_sub(antenna.ID, -1) == "2" ~ Y + 353,
                        str_sub(antenna.ID, -1) == "3" ~ Y + 353)) %>%
   st_as_sf(coords = c("X", "Y")) %>% 
-  st_buffer(500) %>% # 6000 m radius coverage are per antenna
+  st_buffer(500) %>% # 500 m radius coverage are per antenna
   st_sf(., crs = 3035) %>% 
-  st_crop(bb.antenna) %>% 
+  st_crop(bb.focus.vec) %>% 
   st_set_agr("aggregate") %>% # clean up
-  mutate(cell.centroid = st_centroid(geometry))
+  mutate(cell.centroid = st_centroid(geometry)) %>% 
+  mutate(area.kind = "Urban")
 
 coverage.areas <- bind_rows(antenna.1, antenna.2, antenna.3)
 
+coverage.areas %>% 
+  st_drop_geometry() %>% 
+  group_by(area.kind) %>% 
+  summarise(n.antenna = n()) %>% 
+  kbl() %>%
+  kable_styling()
+  
+```
 
-exp.layer.1 <- antenna.1 %>% 
-  filter(tower.ID %in% c("RT120")) 
-exp.layer.2 <- antenna.2 %>% 
-  filter(tower.ID %in% c("ST331")) 
-exp.layer.3 <- antenna.3 %>% 
-  filter(tower.ID %in% c("UT132")) 
+This table presents the number of antennas within each layer. Because the layers were cropped to the focus area not every antenna count is a factor of 3. As one can see most of the antennas are in the first layer (rural), then second layer (suburban) and then third (urban). The next figure (Figure 4) will exemplify the coverage areas originating from three towers of differing layers.
+
+```{r}
+exp.layer.1 <- antenna.1 %>%
+  filter(tower.ID %in% c("RT78")) %>% 
+  mutate(area.kind = paste("Rural", "rad.p.ant = 4000m"))
+exp.layer.2 <- antenna.2 %>%
+  filter(tower.ID %in% c("ST72")) %>% 
+  mutate(area.kind = paste("Suburban", "rad.p.ant = 2000m"))
+exp.layer.3 <- antenna.3 %>%
+  filter(tower.ID %in% c("UT76")) %>% 
+  mutate(area.kind = paste("Urban", "rad.p.ant = 500m"))
+exp.all.layers <- bind_rows(exp.layer.1, exp.layer.2, exp.layer.3)
 
   
 ggplot() +
-  geom_sf(data = exp.layer.1, aes(col = antenna.kind), fill = NA) +
-  geom_sf(data = exp.layer.2, aes(col = antenna.kind), fill = NA) +
-  geom_sf(data = exp.layer.3, aes(col = antenna.kind), fill = NA) +
-  ggtitle("Example coverage area per tower per layer", subtitle = "Each color represents a different antenna on the same tower")
-
-ggplot() +
-  geom_sf(data = antenna.1, aes(col = antenna.kind), fill = NA) +
-  geom_sf(data = antenna.2, aes(col = antenna.kind), fill = NA) +
-  geom_sf(data = antenna.3, aes(col = antenna.kind), fill = NA) +
-  ggtitle("Complete coverage", subtitle = "Urban areas have more coverage through 3 layers")
-
+  # geom_sf(data = antenna.1) +
+  # geom_sf_label(data = antenna.1, aes(label = tower.ID))
+  geom_sf(data = exp.all.layers, aes(col = area.kind), fill = NA) +
+  ggtitle("Fig. 4: Example coverage area per tower per layer with rotation", subtitle = "Each color represents a different antenna on the same tower")
 ```
 
+The next figure, Figure 5, shows the complete focus area and the coverage of the three layers. One can see that the complete focus area is covered with cell signal and that there is large overlap, especially between the layers. Most coverage is located where population agglomerates.
 
-# Device-to-cell association 
-In this module tiles (also mobile devices) and coverage areas are connected. We are interested which tiles (meaning which cell phones in a generic tile) can receive a signal from which radio cell(s). One could also ask, which radio cell "illuminates" which tile(s). Furthermore, to make this scenario more realistic, we will zoom in to the level of mobile devices, meaning disaggregating the `pop` variable by approximation. This is particularly important when multiple radio cells illuminate a generic tile. Given the possibly different signal strengths of the respective radio cells for this tile, a probability can be calculated for the mobile devices within the tile, which describes the probability of a mobile device being logged in to a specific radio cell. This probability depends on the radio specific signal strength for this tile which currently is a function dependening on the distance between the tile centroid of the mobile device and the centroid of the radio cell. (Insert formula).    
+```{r}
+ggplot() +
+  geom_sf(data = coverage.areas, aes(col = area.kind), fill = NA) +
+  ggtitle("Fig 5: Complete coverage", subtitle = "Urban areas have more coverage through 3 layers with rotation")
+```
 
-`dev.to.cell` calculates the tile specific signal strength to every relevant radio cell and the probabilities p (`weight.pij`), defined in the working paper. `P.mat` represents the matrix P, defined in the working paper, as a sparse matrix. The rows are the tiles, the columns are the radio cells and the matrix is populated with the probabilities `weight.pij`. `U.vec` represents the population column vector. `C.vec` entails the stochastic process which cell phone of a specific tile estimated to be logged in to which radio cell. This info again can be aggreagted to population counts within a radio cell. The estimated population total cannot exceed the true population total because it is insured that no cell phone is logged into multiple radio cells at the same time.
+# Device-to-cell association
+
+In this module tiles (also mobile devices) and coverage areas are connected. We are interested which tiles (meaning which cell phones in a generic tile) can receive a signal from which antennas. One could also ask, which antenna "illuminates" which tile(s). Furthermore, to make the scenario more realistic, we will zoom in to the level of mobile devices, meaning disaggregating the `pop` variable by approximation. This is particularly important when multiple antennas illuminate a single tile. Given the possibly different signal strengths of the respective radio cells for this tile, a probability can be calculated for the mobile devices within the tile, which describes the probability of a mobile device being logged in to a specific antenna. This probability depends on the antenna specific signal strength for this tile which currently is a function depending on the distance between the tile centroid of the mobile device and the centroid of the coverage area of the antenna (Insert formula, this will be updated with a more realistic formula).
+
+`dev.to.cell` calculates the tile specific signal strength to every relevant radio cell and the probabilities p (`weight.pij`), defined in the working paper. `P.mat` represents the matrix P, defined in the working paper, as a sparse matrix. The rows are the tiles, the columns are the radio cells and the matrix is populated with the probabilities `weight.pij`. `U.vec` represents the population column vector. `C.vec` entails the stochastic process which cell phone of a specific tile estimated to be logged in to which antenna. This info again can be aggreagted to population counts within an antenna. The estimated population total cannot exceed the true population total because it is insured that no cell phone is logged into multiple radio cells at the same time. (This will be further visualised via plots and tables in the next version).
+
 ```{r}
 dev.to.cell <- census.de.1km.tile %>% 
   mutate(tile.centroid = st_centroid(geometry)) %>%
   st_join(coverage.areas, left = F) %>% 
   mutate(dist.sij = st_distance(cell.centroid, tile.centroid, by_element = T)) %>% 
-  mutate(signal.sij = 1 / (dist.sij * random.vec)) %>% # dependent threshold value
+  mutate(signal.sij = 1 / (dist.sij)) %>% # implement relevant signal strength formula
   # mutate(signal.sij = (2^(-1/as.numeric(dist.sij)))) %>% # dependent threshold value
   group_by(internal.id) %>%
   mutate(weight.pij = as.numeric(signal.sij / sum(signal.sij, na.rm = T))) 
 
 # sparse matrix of device to cell
 P.mat <- dev.to.cell %>% 
-  dplyr::select(internal.id, universal.id, weight.pij) %>% 
+  dplyr::select(internal.id, antenna.ID, weight.pij) %>% 
   st_drop_geometry() %>% 
-  pivot_wider(id_cols = universal.id, names_from = internal.id, 
+  pivot_wider(id_cols = antenna.ID, names_from = internal.id, 
               values_from = weight.pij) %>% 
   as.matrix() %>% 
   Matrix(sparse = T)
@@ -237,10 +280,10 @@ U.vec <- census.de.1km.tile %>%
 
 # C-vector (total count of mobile phones of a tile stochastically assigned to a radio cell based on P --> here: weight.pij)
 C.vec <- dev.to.cell %>% 
-  dplyr::select(internal.id, universal.id, pop, weight.pij) %>% 
+  dplyr::select(internal.id, antenna.ID, pop, weight.pij) %>% 
   st_drop_geometry() %>%
   split(.$internal.id) %>% 
-  map(~sample(x = .$universal.id, mean(.$pop),
+  map(~sample(x = .$antenna.ID, mean(.$pop),
               replace = T, prob = .$weight.pij)) %>% 
   map(as_tibble, .id = "internal.id") %>% 
   map(~group_by(., value)) %>% 
@@ -248,11 +291,6 @@ C.vec <- dev.to.cell %>%
 # TO DO: Implement example of the stochastic process
 ```
 
-## Current questions:
-* **What is the difference between the module "Generation of radio network" and the module "Network modelling" in the working paper**    
-* **What is the definition of a seed in terms of an antenna (module Network modelling)**    
+## Current todos
 
-## Major TO DOs:
-
-
-
+Implement signal strength formula from <https://en.wikipedia.org/wiki/Signal_strength_in_telecommunications>
