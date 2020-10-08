@@ -27,27 +27,37 @@ census.raw <- read_csv2("Data/Census data Germany/Zensus 1km.csv")
 census.de.1km <- census.raw %>% 
   dplyr::select(x = x_mp_1km, y = y_mp_1km, tile.id = Gitter_ID_1km, pop = Einwohner) %>% 
   mutate(internal.id = row_number()) %>% 
-  mutate(pop = case_when(pop == 1 ~ sample(1:250, n(), replace = T),
-                         pop == 2 ~ sample(250:500, n(), replace = T),
-                         pop == 3 ~ sample(500:2000, n(), replace = T),
-                         pop == 4 ~ sample(2000:4000, n(), replace = T),
-                         pop == 5 ~ sample(4000:8000, n(), replace = T),
-                         pop == 6 ~ sample(8000:12000, n(), replace = T),
-                         pop == "-1" ~ as.integer(1)))
+  mutate(pop.category = pop) %>% 
+  mutate(pop = case_when(pop == 1 ~ sample(1:250, n(), replace = T), # rural
+                         pop == 2 ~ sample(251:500, n(), replace = T), # rural
+                         pop == 3 ~ sample(501:2000, n(), replace = T), # rural
+                         pop == 4 ~ sample(2001:4000, n(), replace = T), # sub urban
+                         pop == 5 ~ sample(4001:8000, n(), replace = T), # sub urban
+                         pop == 6 ~ sample(8001:12000, n(), replace = T), # urban
+                         pop == "-1" ~ as.integer(1))) # undisclosed, rural
+
 
 # Filtering only tiles within specified bounding box, creating tile polygons and transforming the object to an sf object with a specific coordinate reference system (projection)
 census.de.1km.tile <- census.de.1km %>% 
-  filter(between(y, 2800000, 2850000),
+  filter(between(y, 2800000, 2850000), # 285
          between(x, 4500000, 4600000)) %>%
+    # filter(between(y, 2650000, 3000000), # 285
+    #      between(x, 4300000, 4600000)) %>%
   rasterFromXYZ(crs = st_crs(3035)$proj4string) %>% 
   rasterToPolygons() %>%
   st_as_sf() %>% 
-  st_transform(crs = 3035) 
+  st_transform(crs = 3035) %>% 
+  mutate(pop.category = case_when(pop %in% c("-1", 1, 2, 3, 4) ~ "rural",
+                                  pop %in% c(5) ~ "suburban",
+                                  pop %in% c(6) ~ "urban"))
 
 
 # Bounding box of focus area
+# focus.bb <- data.frame(maxlat = 4600000, minlat = 4300000,
+#                        maxlong = 3000000, minlong = 2650000)
 focus.bb <- data.frame(maxlat = 4600000, minlat = 4300000,
                        maxlong = 2850000, minlong = 2650000)
+
 
 # Focusing on the area within the bounding box (south bavaria)
 census.de.1km %>% 
@@ -75,99 +85,126 @@ census.de.1km.tile %>%
 ```
 
 # Generation of the Radio Network
-For the generation of the radio network, real cell tower location data for Germany was found on the internet (cite source). This data is loaded in and cleaned (Creation of IDs and cropped to South Bavaria). A map is shown where the cell towers are located.
 ```{r}
+bb.antenna <- c(xmin = 4500000, xmax = 4600000,
+                ymin = 2800000, ymax = 2850000)
 
-# define illumnation intensity sij for each tile 
-
-
-## Generation of radio network ###
-# Real data concerning cell towers in Germany
-cell.tower.hilzen.raw <- read.csv("https://raw.githubusercontent.com/dahilzen/Mobilfunk-Scrape/master/Alle_Funkmasten_BRD.csv")
-cell.tower.position <- cell.tower.hilzen.raw %>% 
-  rename(tower.id = fID) %>% 
-  filter(type == "Mobilfunk") %>% 
-  st_as_sf(coords = c("lon", "lat"), crs = st_crs(4326)$proj4string) %>% 
-  st_transform(crs = 3035) %>% 
-  st_crop(xmin = 4500000, xmax = 4600000,
-          ymin = 2800000, ymax = 2850000) # filtering based on boundary box
-
-
-# mapping cell towers on census map
-census.de.1km.tile %>% 
-  ggplot() +
-  geom_sf(aes(fill = pop)) +
-  geom_sf(data = cell.tower.position, col = "red", size = 0.4) +
-  ggtitle("Location of cell towers (red dots)")
-# one can see that cell towers cluster, where it is more urban
-```
-
-This data only entails the cell tower position, however, there is no indication concerning the number of antennas per cell tower, nor antenna specific characteristics such as direction, tilt, coverage area or signal strength. In order to derive a more realistic scenario some of these parameters will be implemented in subsequent versions. Signal strength will be simulated in a later stage of this document. Currently, it is assumed that there is only one antenna per cell tower and this antenna has a coverage area based on Voronoi tesselation (Alternative 1, non-overlapping coverage areas) or on differing sized buffers (Alternative 2, possibly overlapping coverage areas). However, again, the code is very easy adjustable to integrate more variables. This part ends with a map, presenting the tiles from South Bavaria and the respective coverage areas as polygons. This means one can see which tiles are captured within which coverage area (Device-to-cell association).
-
-
-### Alternative 1: Voronoi tesselation --> non overlapping polygons
-```{r}
-# Defining the coverage area
-# TO DO: create multiple cells per tower
-radio.cells <- cell.tower.position %>% 
-  # slice(rep(1:n(), each = 3)) %>% 
-  mutate(universal.id = paste0("RC.", row_number())) %>%
-  mutate(cell.centroid = st_centroid(geometry))
-  # group_by(tower.id) %>% 
-  # mutate(tower.cell.id = paste0("T.RC.", row_number()))
-
-
-# Option with Voronoi tesselation
-# Coverage area is dataframe with radio cells in the rows and their geometries constituting their respective coverage area
-# random.cell.vec <- sample(nrow(radio.cells))
-# TO DO: create overlapping coverage areas
-# TO DO: Implement signaling strength, currently uniform
-coverage.areas <- radio.cells %>% 
-  st_union() %>% # unite them
-  st_voronoi() %>% # and perform the voronoi tessellation
-  st_collection_extract(type = "POLYGON") %>% # select the polygons
-  st_sf(crs = 3035) %>% 
-  st_crop(xmin = 4500000, xmax = 4600000,
-          ymin = 2800000, ymax = 2850000) %>% 
-  st_join(radio.cells) %>% # & re-connect the data items
-  st_set_agr("aggregate") %>%  # clean up
-  mutate(signal.str = 1) # uniform
-  
-# Overlaying the coverage areas with the census data (Device to cell association)
-coverage.areas %>% 
-  ggplot() +
-  geom_sf(data = census.de.1km.tile, aes(fill = pop)) +
-  geom_sf(col = 'red', fill = NA) +
-  ggtitle("Device-to-cell association", "Non-overlapping Voronoi Tesselation")
-  
-```
-
-
-
-### Alternative 2: Random Buffering --> Overlapping polygons
-Here the coverage area depends on a 5 category scale which currently is assigned to each radio cell randomly. Each category entails a different polygon size representing the coverage area. This coverage area currently always has the location of its radio cell as its centroid. Due to differing sizes, coverage areas can overlap, meaning that tiles can be "illuminated" by multiple radio cells.
-```{r}
-# random vector, which radio cell should get which size of coverage area
-# TO DO: instead of random categories there should be a model underneath this, such as differences between urban and rural areas, etc..
-random.vec <- sample(c(1:5), length(radio.cells$tower.id), replace = T)
-buffer.cat <- c("1" = 500, "2" = 700, "3" = 1000, "4" = 2000, "5" = 3000)
-
-coverage.areas.over <- radio.cells %>% 
-  mutate(random.vec = random.vec) %>% 
-  split(.$random.vec) %>% 
-  map2_df(., buffer.cat, ~st_buffer(.x, .y)) %>% 
+layer.1 <- st_make_grid(census.de.1km.tile, cellsize = 10000, square = F) # different cell size (qm)
+antenna.1 <- layer.1 %>% 
+  st_coordinates() %>% 
+  as_tibble() %>% 
+  dplyr::select(X, Y) %>%
+  distinct() %>%  # remove duplicate corners 
+  mutate(tower.ID = paste0("RT", 1:n())) %>% 
+  slice(rep(1:n(), each = 3)) %>% 
+  group_by(tower.ID) %>% 
+  mutate(antenna.ID = paste("A", tower.ID, 1:3, sep = ".")) %>% 
+  ungroup() %>% 
+  mutate(antenna.kind = str_sub(antenna.ID, -1)) %>% 
+  mutate(X = case_when(str_sub(antenna.ID, -1) == "1" ~ X - 0,
+                       str_sub(antenna.ID, -1) == "2" ~ X + 2211,
+                       str_sub(antenna.ID, -1) == "3" ~ X - 2211)) %>%
+  mutate(Y = case_when(str_sub(antenna.ID, -1) == "1" ~ Y - 3000, # meter distance apart
+                       str_sub(antenna.ID, -1) == "2" ~ Y + 2211,
+                       str_sub(antenna.ID, -1) == "3" ~ Y + 2211)) %>%
+  st_as_sf(coords = c("X", "Y")) %>% 
+  st_buffer(4000) %>% # 4000 m radius coverage are per antenna
   st_sf(., crs = 3035) %>% 
-  st_crop(xmin = 4500000, xmax = 4600000,
-          ymin = 2800000, ymax = 2850000) %>% 
+  st_crop(bb.antenna) %>% 
+  st_set_agr("aggregate") %>% # clean up
+  mutate(cell.centroid = st_centroid(geometry))
+
+rotation = function(a){
+  r = a * pi / 180 #degrees to radians
+  matrix(c(cos(r), sin(r), -sin(r), cos(r)), nrow = 2, ncol = 2)
+} 
+
+layer.2.geo <- census.de.1km.tile %>% 
+  filter(pop.category %in% c("suburban", "urban")) %>% 
+  st_make_grid(cellsize = 2000, square = T) %>% 
+  st_geometry()
+layer.2.cntrd <- st_centroid(layer.2.geo)
+layer.2 <- (layer.2.geo - layer.2.cntrd) * rotation(35) + layer.2.cntrd # rotate by 35 degrees
+
+
+antenna.2 <- layer.2 %>% 
+  st_coordinates() %>% 
+  as_tibble() %>% 
+  dplyr::select(X, Y) %>%
+  distinct() %>%  # remove duplicate corners 
+  mutate(tower.ID = paste0("ST", 1:n())) %>% 
+  slice(rep(1:n(), each = 3)) %>% 
+  group_by(tower.ID) %>% 
+  mutate(antenna.ID = paste("A", tower.ID, 1:3, sep = ".")) %>% 
+  ungroup() %>% 
+  mutate(antenna.kind = str_sub(antenna.ID, -1)) %>% 
+  mutate(X = case_when(str_sub(antenna.ID, -1) == "1" ~ X - 0,
+                       str_sub(antenna.ID, -1) == "2" ~ X + 1060,
+                       str_sub(antenna.ID, -1) == "3" ~ X - 1060)) %>%
+  mutate(Y = case_when(str_sub(antenna.ID, -1) == "1" ~ Y - 1500, # meter distance apart
+                       str_sub(antenna.ID, -1) == "2" ~ Y + 1060,
+                       str_sub(antenna.ID, -1) == "3" ~ Y + 1060)) %>%
+  st_as_sf(coords = c("X", "Y")) %>% 
+  st_buffer(2000) %>% # 6000 m radius coverage are per antenna
+  st_sf(., crs = 3035) %>% 
+  st_crop(bb.antenna) %>% 
   st_set_agr("aggregate") %>%  # clean up
   mutate(cell.centroid = st_centroid(geometry))
 
+layer.3.geo <- census.de.1km.tile %>% 
+  filter(pop.category %in% c("urban")) %>% 
+  st_make_grid(cellsize = 1000, square = T) %>% 
+  st_geometry()
+layer.3.cntrd <- st_centroid(layer.3.geo)
+layer.3 <- (layer.3.geo - layer.3.cntrd) * rotation(35) + layer.3.cntrd # rotate by 35 degrees
 
-coverage.areas.over %>% 
-  ggplot() +
-  geom_sf(data = census.de.1km.tile, aes(fill = pop)) +
-  geom_sf(col = 'red', fill = NA) +
-  ggtitle("Device-to-cell association", "Overlapping, different size coverage areas")
+antenna.3 <- layer.3 %>% 
+  st_coordinates() %>% 
+  as_tibble() %>% 
+  dplyr::select(X, Y) %>%
+  distinct() %>%  # remove duplicate corners 
+  mutate(tower.ID = paste0("UT", 1:n())) %>% 
+  slice(rep(1:n(), each = 3)) %>% 
+  group_by(tower.ID) %>% 
+  mutate(antenna.ID = paste("A", tower.ID, 1:3, sep = ".")) %>% 
+  ungroup() %>% 
+  mutate(antenna.kind = str_sub(antenna.ID, -1)) %>% 
+  mutate(X = case_when(str_sub(antenna.ID, -1) == "1" ~ X - 0,
+                       str_sub(antenna.ID, -1) == "2" ~ X + 353,
+                       str_sub(antenna.ID, -1) == "3" ~ X - 353)) %>%
+  mutate(Y = case_when(str_sub(antenna.ID, -1) == "1" ~ Y - 500, # meter distance apart
+                       str_sub(antenna.ID, -1) == "2" ~ Y + 353,
+                       str_sub(antenna.ID, -1) == "3" ~ Y + 353)) %>%
+  st_as_sf(coords = c("X", "Y")) %>% 
+  st_buffer(500) %>% # 6000 m radius coverage are per antenna
+  st_sf(., crs = 3035) %>% 
+  st_crop(bb.antenna) %>% 
+  st_set_agr("aggregate") %>% # clean up
+  mutate(cell.centroid = st_centroid(geometry))
+
+coverage.areas <- bind_rows(antenna.1, antenna.2, antenna.3)
+
+
+exp.layer.1 <- antenna.1 %>% 
+  filter(tower.ID %in% c("RT120")) 
+exp.layer.2 <- antenna.2 %>% 
+  filter(tower.ID %in% c("ST331")) 
+exp.layer.3 <- antenna.3 %>% 
+  filter(tower.ID %in% c("UT132")) 
+
+  
+ggplot() +
+  geom_sf(data = exp.layer.1, aes(col = antenna.kind), fill = NA) +
+  geom_sf(data = exp.layer.2, aes(col = antenna.kind), fill = NA) +
+  geom_sf(data = exp.layer.3, aes(col = antenna.kind), fill = NA) +
+  ggtitle("Example coverage area per tower per layer", subtitle = "Each color represents a different antenna on the same tower")
+
+ggplot() +
+  geom_sf(data = antenna.1, aes(col = antenna.kind), fill = NA) +
+  geom_sf(data = antenna.2, aes(col = antenna.kind), fill = NA) +
+  geom_sf(data = antenna.3, aes(col = antenna.kind), fill = NA) +
+  ggtitle("Complete coverage", subtitle = "Urban areas have more coverage through 3 layers")
+
 ```
 
 
@@ -178,9 +215,10 @@ In this module tiles (also mobile devices) and coverage areas are connected. We 
 ```{r}
 dev.to.cell <- census.de.1km.tile %>% 
   mutate(tile.centroid = st_centroid(geometry)) %>%
-  st_join(coverage.areas.over, left = F) %>% 
+  st_join(coverage.areas, left = F) %>% 
   mutate(dist.sij = st_distance(cell.centroid, tile.centroid, by_element = T)) %>% 
   mutate(signal.sij = 1 / (dist.sij * random.vec)) %>% # dependent threshold value
+  # mutate(signal.sij = (2^(-1/as.numeric(dist.sij)))) %>% # dependent threshold value
   group_by(internal.id) %>%
   mutate(weight.pij = as.numeric(signal.sij / sum(signal.sij, na.rm = T))) 
 
@@ -203,7 +241,7 @@ C.vec <- dev.to.cell %>%
   st_drop_geometry() %>%
   split(.$internal.id) %>% 
   map(~sample(x = .$universal.id, mean(.$pop),
-                              replace = T, prob = .$weight.pij)) %>% 
+              replace = T, prob = .$weight.pij)) %>% 
   map(as_tibble, .id = "internal.id") %>% 
   map(~group_by(., value)) %>% 
   map(~summarise(., pop.count.rand = n(), .groups = "drop"))
@@ -211,9 +249,10 @@ C.vec <- dev.to.cell %>%
 ```
 
 ## Current questions:
-* **Is there a difference between an antenna and a radio cell?**     
 * **What is the difference between the module "Generation of radio network" and the module "Network modelling" in the working paper**    
-* **What is meant with seeds**    
+* **What is the definition of a seed in terms of an antenna (module Network modelling)**    
 
 ## Major TO DOs:
-**Implement a "scenario table" which acts as a vignette for every scenario and which parameters are specified**
+
+
+
