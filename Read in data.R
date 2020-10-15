@@ -1,5 +1,5 @@
-
-## Read in of raw census data
+# MNO Chain 
+## 1 Read in of raw census data
 
 library(tidyverse)
 library(data.table)
@@ -35,9 +35,10 @@ census.tile.final <- census.de.100m.tile %>%
   dplyr::select(-parts)
 
 saveRDS(census.tile.final, file = "working objects/census.tile.final.rds")
+d <- readRDS("working objects/census.tile.final.rds")
 
 # plot sample
-census.tile.final %>% 
+d %>% 
   sample_n(100000) %>% 
   ggplot() +
   geom_sf(aes(color = pop))
