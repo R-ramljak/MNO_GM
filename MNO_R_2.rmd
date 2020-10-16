@@ -49,7 +49,7 @@ Important features and parameters:
 
 -   We have a continuous and a three level ordinal variable representing the population density for each tile
 
-The link to the source code for the census.de.100.m.tile object is [here](https://github.com/R-ramljak/MNO_GM/blob/master/Read%20in%20data.R).
+The link to the source code for the census.de.100.m.tile object is [here](https://github.com/R-ramljak/MNO_GM/blob/master/1_Read%20in%20data.R).
 
 ```{r message=FALSE}
 census.de.100m.tile <- readRDS("working objects/census.tile.final.rds")
