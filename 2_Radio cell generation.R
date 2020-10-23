@@ -9,10 +9,20 @@ library(sf)
 census.de.100m.tile <- readRDS("working objects/census.tile.final.rds")
 
 census.de.100m.tile.1 <- census.de.100m.tile %>% 
-  mutate(pop.category = case_when(pop == "-1" ~ "Rural", 
-                                  pop <= 20 ~ "Rural", 
-                                  pop >= 21 & pop <= 55 ~ "Suburban", 
+  mutate(pop = case_when(pop == "-1" ~ 1,
+                         is.na(pop) ~ 0,
+                         TRUE ~ as.double(pop))) %>% 
+  mutate(pop.category = case_when(between(pop, 0, 5) ~ "Rural", 
+                                  between(pop, 6, 55) ~ "Suburban", 
                                   pop >= 56 ~ "Urban"))
+
+# table(census.de.100m.tile.1$pop.category)
+# 
+# census.de.100m.tile.1 %>%
+#   sample_n(10000) %>% 
+#   ggplot() +
+#   geom_sf(aes(fill = pop.category, color = pop.category))
+
 ## Parameters
 
 # Three region / layer types
@@ -24,9 +34,9 @@ layer.base <- list("Rural" = census.de.100m.tile.1, "Suburban" = census.de.100m.
 
 
 area.kind <- list("Rural" = "Rural", "Suburban" = "Suburban", "Urban" = "Urban")
-cellsize <- list("Rural" = 35000, "Suburban" = 5000, "Urban" = 700) # relation to radius (qm)
+tower.dist <- list("Rural" = 25000, "Suburban" = 4500, "Urban" = 800) # relation to radius (qm)
 rotation.degree <- list("Rural" = 0, "Suburban" = 35, "Urban" = 70)
-jitter <- list("Rural" = 10000, "Suburban" = 1000, "Urban" = 300)
+jitter <- list("Rural" = 5000, "Suburban" = 1000, "Urban" = 400)
 coverage.centroid.dist <- list("Rural" = 15000, "Suburban" = 2500, "Urban" = 500) # same as radius
 coverage.radius <- c("Rural" = 15000, "Suburban" = 2500, "Urban" = 500)
 
@@ -41,9 +51,9 @@ rotation = function(a){
   matrix(c(cos(r), sin(r), -sin(r), cos(r)), nrow = 2, ncol = 2)
 } 
 
-layer_network_generate = function(x, cellsize, rotation.degree){
+layer_network_generate = function(x, tower.dist, rotation.degree){
   layer.geo <- x %>% 
-    st_make_grid(cellsize = cellsize, square = F, flat_topped = T) %>%  # different cell size (qm)
+    st_make_grid(cellsize = tower.dist, square = F, flat_topped = T) %>%  # different cell size (qm)
     st_geometry()
   
   layer.centroid <- st_centroid(layer.geo)
@@ -54,8 +64,8 @@ layer_network_generate = function(x, cellsize, rotation.degree){
 
 
 # Generate layers
-layers <- pmap(list(layer.base, cellsize, rotation.degree), 
-              ~layer_network_generate(x = ..1, cellsize = ..2, rotation.degree = ..3)) %>% 
+layers <- pmap(list(layer.base, tower.dist, rotation.degree), 
+              ~layer_network_generate(x = ..1, tower.dist = ..2, rotation.degree = ..3)) %>% 
   set_names(c("Layer.1", "Layer.2", "Layer.3"))
 
 saveRDS(layers, file = "working objects/radio cell layers.rds")
@@ -78,18 +88,21 @@ coverage.areas <- layers %>%
   map(~ungroup(.)) %>%
   map(~mutate(., antenna.kind = str_sub(antenna.ID, -1))) %>%
   map2(., coverage.centroid.dist, ~mutate(.x,
-                                          X.ant = case_when(antenna.kind == "1" ~ X.tow - .y * 0,
+                                          X.ant.help = case_when(antenna.kind == "1" ~ X.tow - .y * 0,
                                                             antenna.kind == "2" ~ X.tow + .y * 0.77,
                                                             antenna.kind == "3" ~ X.tow - .y * 0.77),
-                                          Y.ant = case_when(antenna.kind == "1" ~ Y.tow - .y * 1, # meter distance apart
+                                          Y.ant.help = case_when(antenna.kind == "1" ~ Y.tow - .y * 1, # meter distance apart
                                                             antenna.kind == "2" ~ Y.tow + .y * 0.77,
                                                             antenna.kind == "3" ~ Y.tow + .y * 0.77))) %>%
-  map(~st_as_sf(., coords = c("X.ant", "Y.ant"))) %>%
+  # map(~mutate(., X.ant = X.ant.help,
+  #             Y.ant = Y.ant.help)) %>% 
+  map(~st_as_sf(., coords = c("X.ant.help", "Y.ant.help"))) %>%
+  map(~mutate(., antenna.centroid = geometry)) %>% 
   map2(., coverage.radius, ~st_buffer(.x, .y)) %>% # radius coverage are per antenna
+  map2(., coverage.radius, ~mutate(.x, coverage.radius = .y)) %>% # 
   map(~st_sf(., crs = 3035)) %>%
   map(~st_crop(., bb.focus.vec)) %>%
   map(~st_set_agr(., "aggregate")) %>% # clean up
-  map(~mutate(., cell.centroid = st_centroid(geometry))) %>%
   map2_dfr(., area.kind, ~mutate(., area.kind = .y))
 
 saveRDS(coverage.areas, file = "working objects/coverage.areas.rds")
@@ -105,14 +118,18 @@ table(census.de.100m.tile.1$pop.category)
 
 
 r <- coverage.areas %>% 
-  filter(area.kind == "Suburban")
+  filter(tower.ID %in% c("RT20", "RT21"))
 
-r %>% 
+  
+
+coverage.areas %>%
+  filter(area.kind == "Urban")  %>% 
   ggplot() +
-  geom_jitter(aes(X.tow, Y.tow)) +
+  geom_point(aes(X.tow, Y.tow), color = "red") +
+  geom_point(aes(X.ant, Y.ant)) +
   # geom_label(aes(X.tow, Y.tow, label = point.pos, fill = factor(L2)))
-  geom_text(aes(X.tow, Y.tow, label = antenna.ID, fill = factor(tower.ID))) +
-  geom_sf()
+  # geom_text(aes(X.tow, Y.tow, label = antenna.ID, fill = factor(tower.ID))) +
+  geom_sf(fill = NA)
 
 f <- coverage.areas %>% 
   filter(area.kind == "Rural") %>%
