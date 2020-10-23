@@ -11,12 +11,9 @@ output:
 
 ```{r message=FALSE}
 library(tidyverse)
-library(data.table)
 library(sf)
-library(lubridate)
 library(raster)
 library(Matrix)
-library(tmap)
 library(knitr)
 library(kableExtra)
 
@@ -188,23 +185,15 @@ layers.1[[1]] %>%
   geom_sf(data = coverage.layer.1, color = "red", shape = 17) +
   ggtitle("Fig 4: Radio network - Example Layer 1", subtitle = "Tower locations (in red) slightly jittered to break symmetry")
 
+
 ```
 
-```{r}
-
-
-example <- coverage.areas.1 %>% 
-  filter(tower.ID %in%  c("RT7", "RT8","RT9", "RT10",
-                          "ST100", "ST101","ST102", "ST103",
-                          "UT900", "UT901","UT902", "UT903"))
-
-example %>% 
-  ggplot() +
-  geom_sf(aes(col = area.kind), fill = NA) +
-  geom_point(aes(X.tow, Y.tow), shape = 17, size = 2) +
-  facet_grid(cols = vars(area.kind)) +
-  ggtitle("Fig 5: Example coverage of each layer (4 towers each)", subtitle = "3 antennas per tower, differing coverage diameter per layer, overlapping coverage areas")
+```{r testing, fig.cap="example caption"}
+knitr::include_graphics("working objects/antenna animation.gif")
 ```
+
+
+
 
 ```{r}
 coverage.areas.1 <- readRDS("working objects/coverage.areas.rds")
@@ -222,14 +211,6 @@ coverage.areas.1 %>%
   kable_minimal()
 ```
 
-```{r}
-coverage.areas.1 %>% 
-  st_drop_geometry() %>% 
-  distinct(tower.ID, .keep_all = T) %>% 
-  ggplot() +
-  geom_point(aes(X.tow, Y.tow, color = area.kind), shape = 17) +
-  ggtitle("Fig 6: Tower locations per layer", subtitle = "Urban areas have more coverage through 3 layers with rotation")
-```
 
 ```{r}
 coverage.areas.1 %>% 
