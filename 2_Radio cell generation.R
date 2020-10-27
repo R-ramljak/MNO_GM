@@ -6,22 +6,7 @@ library(data.table)
 library(sf)
 
 # Initital object from file 1 Read In
-census.de.100m.tile <- readRDS("working objects/census.tile.final.rds")
-
-census.de.100m.tile.1 <- census.de.100m.tile %>% 
-  mutate(pop = case_when(pop == "-1" ~ 1,
-                         is.na(pop) ~ 0,
-                         TRUE ~ as.double(pop))) %>% 
-  mutate(pop.category = case_when(between(pop, 0, 5) ~ "Rural", 
-                                  between(pop, 6, 55) ~ "Suburban", 
-                                  pop >= 56 ~ "Urban"))
-
-# table(census.de.100m.tile.1$pop.category)
-# 
-# census.de.100m.tile.1 %>%
-#   sample_n(10000) %>% 
-#   ggplot() +
-#   geom_sf(aes(fill = pop.category, color = pop.category))
+census.de.100m.tile.1 <- readRDS("working objects/census.tile.final.rds")
 
 ## Parameters
 
@@ -30,7 +15,7 @@ type <- list("Rural" = c("Rural", "Suburban", "Urban"),
              "Suburban" = c("Suburban", "Urban"),
              "Urban" = c("Urban"))
 layer.base <- list("Rural" = census.de.100m.tile.1, "Suburban" = census.de.100m.tile.1, "Urban" = census.de.100m.tile.1) %>% 
-  map2(., type, ~filter(.x, pop.category %in% .y))
+  map2(., type, ~filter(.x, area.kind %in% .y))
 
 
 area.kind <- list("Rural" = "Rural", "Suburban" = "Suburban", "Urban" = "Urban")
@@ -112,8 +97,6 @@ coverage.areas %>%
   st_drop_geometry() %>%
   group_by(area.kind) %>%
   summarise(n.antenna = n())
-
-table(census.de.100m.tile.1$pop.category)       
 
 
 
