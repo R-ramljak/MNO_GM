@@ -10,7 +10,7 @@ library(stars)
 library(osc)
 
 # Raw census 100 m² data read in
-census.raw <- fread("Data/Census data Germany/csv_Bevoelkerung_100m_Gitter/Zensus_Bevoelkerung_100m-Gitter.csv")
+census.raw <- fread("C:/Users/Marco/OneDrive - Universiteit Utrecht/MNO/Data/Census data Germany/csv_Bevoelkerung_100m_Gitter/Zensus_Bevoelkerung_100m-Gitter.csv")
 
 # Dataframe with bounding box, tile id, and two versions of the population variable
 census.de.100m <- census.raw %>% 
@@ -27,7 +27,7 @@ census.de.100m <- census.raw %>%
                                 pop >= 70 ~ 1)) %>% 
   dplyr::select(-pop.raw)
 
-saveRDS(census.de.100m, "working objects/example data frame.rds")
+saveRDS(census.de.100m, "C:/Users/Marco/OneDrive - Universiteit Utrecht/MNO/working objects/example data frame.rds")
 
 # Raster brick object of the complete bounding box region
 census.tile <- raster::rasterFromXYZ(census.de.100m, crs = st_crs(3035)$proj4string)
@@ -58,13 +58,13 @@ census.classified.final.sf <- census.classified.sf %>%
   group_by(cluster_id) %>% 
   mutate(cluster.tile.n = n()) %>% 
   ungroup() %>% 
-  mutate(area.kind = case_when(pop.raster != 0 & cluster.tile.n > 100 ~ "Urban", # cluster with at least 100 tiles is urban
-                               pop.raster != 0 & cluster.tile.n > 50 & cluster.tile.n <= 100 ~ "Suburban", # cluster with at least fifty and below 100 tiles is suburban
-                               TRUE ~ "Rural")) %>%  # Remaining tiles are considered as rural
+  mutate(pop.area.kind = case_when(pop.raster != 0 & cluster.tile.n > 100 ~ "Urban", # cluster with at least 100 tiles is urban
+                                   pop.raster != 0 & cluster.tile.n > 50 & cluster.tile.n <= 100 ~ "Suburban", # cluster with at least fifty and below 100 tiles is suburban
+                                   TRUE ~ "Rural")) %>%  # Remaining tiles are considered as rural
   dplyr::select(-parts)
 
 
-saveRDS(census.classified.final.sf, "working objects/census.tile.final.rds")
+saveRDS(census.classified.final.sf, "C:/Users/Marco/OneDrive - Universiteit Utrecht/MNO/working objects/census.tile.final.rds")
 
 
 ######################################################

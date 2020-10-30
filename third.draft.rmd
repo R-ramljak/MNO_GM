@@ -1,5 +1,5 @@
 ---
-title: "Estimating present population based on Mobile Network Operator data - a simulation study - third draft ??.10.2020"
+title: "Estimating present population based on Mobile Network Operator data - a simulation study - third draft 29.10.2020"
 author: "Stefania, Giulia, Tony, Marco"
 output:  
   html_document:
@@ -16,6 +16,8 @@ library(raster)
 library(Matrix)
 library(knitr)
 library(kableExtra)
+library(ggthemes)
+library(cowplot)
 
 set.seed(762)
 ```
@@ -46,30 +48,18 @@ Important features and parameters:
 
 -   We have a continuous and a three level ordinal variable representing the population density for each tile
 
-The link to the source code for the census.de.100.m.tile object is [here](https://github.com/R-ramljak/MNO_GM/blob/master/1_Read%20in%20data.R).
+The link to the source code for the `census.de.100.m.tile` object is [here](https://github.com/R-ramljak/MNO_GM/blob/master/1_Read%20in%20data.R).
 
 ```{r message=FALSE}
-census.de.100m.tile <- readRDS("working objects/census.tile.final.rds")
+census.de.100m.tile <- readRDS("C:/Users/Marco/OneDrive - Universiteit Utrecht/MNO/working objects/census.tile.final.rds")
 
-# Giulia and Stefania will change the definition of rural, suburban...
+dim(census.de.100m.tile)
+class(census.de.100m.tile)
 
-# Filtering only tiles within specified bounding box, creating tile polygons and transforming the object to an sf object with a specific coordinate reference system (projection)
-census.de.100m.tile.1 <- census.de.100m.tile %>% 
-  rename(pop.raw = pop) %>% 
-  mutate(pop = case_when(pop.raw == "-1" | is.na(pop.raw) ~ as.integer(1),
-                         # pop.raw == "-1" ~ sample(0:1, n(), replace = T),
-                         pop.raw == 2 ~ sample(2:3, n(), replace = T),
-                         TRUE ~ as.integer(pop.raw)))
-
-
-dim(census.de.100m.tile.1)
-class(census.de.100m.tile.1)
-
-census.de.100m.tile.1 %>%
+census.de.100m.tile %>%
   st_drop_geometry() %>% 
-  filter(!pop == "-1") %>% 
   sample_n(10) %>% 
-  head() %>%
+  # head() %>%
   kbl(caption = "Exploration of the dataset about tiles of South Bavaria") %>%
   kable_minimal()
 ```
@@ -77,27 +67,32 @@ census.de.100m.tile.1 %>%
 *This plot and description need revision*
 
 ```{r}
-
-
 # # Bounding box of focus area
-# bb.focus.dat <- data.frame(xmin = 4400000, xmax = 4500000,
-#                            ymin = 2700000, ymax = 2900000)
-# bb.focus.vec <- c(xmin = 4400000, xmax = 4500000,
-#                   ymin = 2800000, ymax = 2900000)
-# 
-# 
-# ## Giulia and Stefania will change this to the shape of Germany
-# 
-# # Focusing on the area within the bounding box (south bavaria)
-# census.de.100m.tile.1 %>% 
-#   st_union() %>% 
-#   ggplot() +
-#   geom_sf()
-#   geom_point(aes(x = x, y = y)) +
-#   geom_rect(data = bb.focus.dat, aes(ymin = ymin, ymax = ymax, 
-#                                      xmin = xmin, xmax = xmax), 
-#             color = "red", size = 2, fill = "transparent") +
-#   ggtitle("Figure 1: Focusing on the area within the bounding box (South Bavaria)")
+ bb.focus.dat <- data.frame(xmin = 4400000, xmax = 4500000,
+                            ymin = 2700000, ymax = 2900000)
+ bb.focus.vec <- c(xmin = 4400000, xmax = 4500000,
+                   ymin = 2700000, ymax = 2900000)
+
+#Download data from : https://gadm.org/download_country_v3.html --> R(sf) level 1
+germany.raw <- readRDS("C:/Users/Marco/OneDrive - Universiteit Utrecht/MNO/working objects/gadm36_DEU_1_sf.rds")
+germany = germany.raw %>% 
+  st_transform(crs=3035)
+
+Fig.1 <- germany %>% 
+  ggplot() +
+  geom_sf() +
+  geom_rect(data = bb.focus.dat, aes(ymin = ymin, ymax = ymax, 
+                                      xmin = xmin, xmax = xmax, 
+                                     color = "red"), 
+            size = 1, fill = "transparent") +
+  ggtitle("") +
+  scale_color_identity(name = "",
+                          # breaks = c("Focus area"),
+                          labels = c("Focus area"),
+                          guide = "legend")
+
+plot_grid(Fig.1, labels = "Fig.1: Focusing on a part of South Bavaria", 
+          hjust = -0.1, label_size = 12)
 ```
 
 *Figure 2 will be adjusted and interpreted at a later stage. We have questions for Fabio about this*
@@ -106,117 +101,195 @@ census.de.100m.tile.1 %>%
 # Since there is a large percentage of zeros in the tiles, we added 1 to every tile to receive valid values for the log transformation
 
 # ECCDF of population distribution
-ECCDF.data <- census.de.100m.tile.1 %>% 
-  arrange(pop) %>% 
+ECCDF.data <- census.de.100m.tile %>% 
+  mutate(pop.plot = pop + 1) %>% 
+  arrange(pop.plot) %>% 
   mutate(prob = 1 / n()) %>% 
   mutate(cum.prob = cumsum(prob)) %>% 
   mutate(log2.cum.prob.comp = log2(1 - cum.prob)) %>% 
-  mutate(log2.pop = log2(pop)) %>% 
-  mutate(cat = case_when(log2.pop == 0 ~ "0-1",
-                              log2.pop <= 2 ~ "2-4",
-                              log2.pop > 2 & log2.pop <= 4 ~ "5-16",
-                              log2.pop > 4 ~ ">17")) %>% # depends on log base
-  mutate(pop.category = case_when(pop <= 20 ~ "Rural", 
-                                  pop >= 21 & pop <= 55 ~ "Suburban", 
-                                  pop >= 56 ~ "Urban")) # THESE CATEGORIES NEED TO BE ADJUSTED BASED ON VALID DEFINTIONS
-  
-ECCDF.data %>%   
+  mutate(log2.pop = log2(pop.plot)) %>% 
+  mutate(pop.area.kind = case_when(pop == 0 ~ "Uninhabitated",
+                                   TRUE ~ pop.area.kind))
+
+
+# Giulia and Stefania will change this
+Fig.2.1 <- ECCDF.data %>%
+  sample_n(10000) %>% 
+  ggplot() +
+  geom_sf(aes(color = pop.area.kind), show.legend = F) +
+  scale_color_ptol(breaks = c("Uninhabitated", "Rural", "Suburban", "Urban")) +
+  ggtitle("", subtitle = "Geographic distribution") +
+  theme(plot.margin=unit(c(0,0,0,0),"mm"))
+
+
+Fig.2.2 <- ECCDF.data %>%  
+  sample_n(1000) %>%
   ggplot() +
   geom_point(aes(x = log2.pop, y = log2.cum.prob.comp,
-                color = cat)) +
+               color = pop.area.kind)) +
   geom_hline(yintercept = -1, linetype = "dotted") +
   geom_hline(yintercept = -4.321928, linetype = "dotted") +
-  geom_text(x = 7, y = -0.8, label = "50% of the data") +
-  geom_text(x = 7, y = -4.1, label = "95% of the data") +
-  ggtitle("Figure 2: ECCDF of Number of mobile phone distribution per tile") + 
-  labs(y = "log2(Prob(Y > x))", x = "log2(Population)", 
-       colour = "Tile population density")  
+  geom_text(x = 6, y = -0.65, label = "50% of the data") +
+  geom_text(x = 6, y = -4, label = "95% of the data") +
+  scale_color_ptol(breaks = c("Uninhabitated", "Rural", "Suburban", "Urban")) +
+  ggtitle("", subtitle = "Empirical cumulative complementary\ndistribution function") + 
+  labs(y = "log2(Prob(Y > x))", x = "log2(Mobile phones)", 
+        colour = "") +
+  theme(legend.position="bottom")
+
+
+
+plot_grid(Fig.2.1, Fig.2.2, labels = "Fig.2: Mobile phone density per tile", 
+          hjust = -0.1, label_size = 12, rel_widths = c(0.8, 1))
 ```
 
 Figure 2 shows the distribution of the population for the focus area. There are a scale of 8 colors representing the different population densities in the area of interest. (This will be later on adjusted with the following figure, representing the log CDF.) Looking at the figure, the major part of the territory has a population count below 2000; there are two evident urban agglomeration that correspond to Munich and Nuremberg. Focusing on these urban areas, a single tile can contain up to 8,000 people.
 
-*This plot and description need revision* *as mentioned in the description*
-
-```{r}
-# Giulia and Stefania will change this
-ECCDF.data %>% 
-  ggplot() +
-  geom_sf(aes(color = cat))
-```
-
 # Generation of a synthetic the Radio Network
 
-At this stage we have a focus area, which is divided into about 1,8 million 100m² tiles. For every tile there is a valid population count value available.
+At this stage we have a focus area, which is divided into about 1,8 million 100m² tiles. Every tile is classified as either `Rural`, `Suburban` or `Urban` and for every tile there is a valid population count value available which we assume to be the tile's respective mobile phone count.
 
-We generate a radio network, which is composed of three layers, according to Fabios suggestion (cite .ppt). The layers follow the pop.category variable, therefore layer 1 is spanned over the rural, suburban and urban tiles, layer 2 is spanned over the suburban and urban tiles and layer 3 is spanned over the urban tiles.
+We generate a radio network, which is composed of three layers. The layers follow the `pop.area.kind` variable - `layer 1 (Rural)` spans over the rural, suburban and urban tiles, `layer 2 (Suburban)` spans over the suburban and urban tiles and `layer 3 (Urban)` is spanned over the urban tiles.
 
-Important features and parameters are:
+**Important features and parameters of the generated radio network are:**
 
 -   The layers follow a hexagon shape with cell towers located in the respective centroid of each hexagon
 
--   Each layer has a different cell size: layer 1 = 35000m; layer 2 = 5000m; layer 3 = 700m (--\> the more urbanized the smaller the cell --\> the more towers) and hexagon independent rotation in terms of the first layer is executed: layer 2 = 35 degrees; layer 2 = 70 degrees
+-   Each cell tower location is jittered in order to break the symmetry. The jitter amount in meters depends on the layer: `layer 1` = 5000m, `layer 2` = 1000m, `layer 3` = 400m).
 
--   Each tower location is jittered in order to break the symmetry. The jitter amount depends on the layer.
+-   Each layer has a different cell size: `layer 1` = 35,000m; `layer 2` = 8000m; `layer 3` = 1000m (--\> the more urbanized the smaller the cell --\> the more towers) and hexagon independent rotation in terms of the first layer is executed: `layer 2` = 35 degrees; `layer 3` = 70 degrees
 
 -   Each tower contains three antennas pointing into 120 degree differing directions
 
--   The layer (and therefore the underlying population density) determines the coverage diameter of an antenna: layer 1 = 15,000m; layer 2 = 2500m; layer 3 = 500m
+-   The layer determines the coverage diameter of an antenna: `layer 1` = 15,000m; `layer 2` = 2500m; `layer 3` = 500m
 
--   The coverage areas are allowed to overlap
+-   Each tile of the focus area is covered by at least one antenna and the antennas' coverage areas are allowed to overlap
 
--   Tower and antenna counts will be listed below
+-   Parameters concerning the device to cell association are specified in the next section
 
 The link to the source code for the layers.1 object as well as the coverage.areas.1 object is [here](https://github.com/R-ramljak/MNO_GM/blob/master/2_Radio%20cell%20generation.R).
 
 ```{r}
-layers.1 <- readRDS("working objects/radio cell layers.rds")
-coverage.areas.1 <- readRDS("working objects/coverage.areas.rds")
+layers <- readRDS("C:/Users/Marco/OneDrive - Universiteit Utrecht/MNO/working objects/radio cell layers.rds")
+coverage.areas <- readRDS("C:/Users/Marco/OneDrive - Universiteit Utrecht/MNO/working objects/coverage.areas.rds")
 
-coverage.layer.1 <- coverage.areas.1 %>% 
+coverage.layer1 <- coverage.areas %>% 
   filter(area.kind == "Rural") %>% 
   st_drop_geometry() %>% 
   dplyr::select(-antenna.centroid) %>% 
   st_as_sf(coords = c("X.tow", "Y.tow"), crs = 3035)
 
-layers.1[[1]] %>%
+Fig.3 <- layers[[1]] %>%
   st_as_sf(crs = 3035) %>% 
   ggplot() +
+    # geom_rect(data = bb.focus.dat, aes(ymin = ymin, ymax = ymax, 
+    #                                   xmin = xmin, xmax = xmax), 
+    #         color = "black", size = 0.3, alpha = 0.5, fill = alpha("grey", 0)) +
   geom_sf(linetype = "dotted") +
-  geom_sf(data = coverage.layer.1, color = "red", shape = 17) +
-  ggtitle("Fig 4: Radio network - Example Layer 1", subtitle = "Tower locations (in red) slightly jittered to break symmetry")
-
-
+  geom_sf(data = coverage.layer1, aes(color = "#4273C5"), shape = 17) +
+  scale_color_identity(name = "",
+                       # breaks = c("Focus area"),
+                       labels = c("Jittered tower location"),
+                       guide = "legend") +
+  ggtitle("")
+  
+plot_grid(Fig.3, labels = "Fig.3: Radio network - Example Layer 1 (Rural)", 
+          hjust = -0.1, label_size = 12)
 ```
 
-```{r testing, fig.cap="example caption"}
-knitr::include_graphics("working objects/antenna animation.gif")
+We use a hexagonal structure to place towers across our focus area. This is a quite realistic structure for cell towers. Each hexagon corresponds to one tower which is originally placed in the centroid of the respective hexagon. Figure 3 exemplifies the effect of the jitter parameter in the 1st layer - the actual location deviates slightly from the centroid in order to break the symmetry of the underlying hexagonal structure. This is done for every layer.
+
+The setup of a tower with its corresponding antennas is in every layer the same: Three antennas per tower, pointing into 120 degree differing directions. The animated visualization exemplifies this for any generic tower.
+
+```{r testing}
+knitr::include_graphics("C:/Users/Marco/OneDrive - Universiteit Utrecht/MNO/working objects/antenna animation.gif")
 ```
 
+Basically, a tower is generated at its specified location, then three antennas are created. For the operationalized data structure, the antenna location is not really relevant as it corresponds to the respective tower location. What is more important are the antennas' *coverage area centroids* because they describe the middle point of the then generated circular coverage area. The specific radius of any generic coverage area are layer specific and listed above. As indicated in the animation, an antenna specific coverage area is setup with a variable *coverage intensity profile.* Basically, cell phones that are closer to the coverage area centroid of any antenna, have a higher coverage probability, which will be later introduced as the *signal strength* parameter.
 
-
+The following table presents the number of towers and the number of antennas of each layer. The number of antennas is not always a perfect factor of 3 as the coverage areas are cropped according to the focus area. This means if the complete coverage area of an antenna lies outside of the focus area it is discarded.
 
 ```{r}
-coverage.areas.1 <- readRDS("working objects/coverage.areas.rds")
-
-coverage.areas.1 %>% 
+coverage.areas %>% 
   st_drop_geometry() %>% 
   group_by(area.kind, tower.ID) %>% 
-  summarise(n.antenna = n()) %>% 
+  summarise(n.antenna = n(), .groups = "drop") %>% 
   ungroup() %>% 
   group_by(area.kind) %>% 
   summarise(n.tower = n(),
-            n.antenna = sum(n.antenna)) %>% 
+            n.antenna = sum(n.antenna), .groups = "drop") %>% 
   dplyr::select(layer = area.kind, n.tower, n.antenna) %>% 
   kbl(caption = "Number of towers and antennas per layer") %>%
   kable_minimal()
 ```
 
+As described in the parameter list above, more urbanized areas are covered by either layer 2 or 3. This leads to denser networks which is presented by the higher numbers of towers and therefore higher numbers of antennas in layer 2 and 3. The reason for this is that any generic antenna can only offer signal service to a limited amount of number of mobile phones. To cover all cell phones in more urbanized areas a denser radio cell network is needed in these areas. This feature will be later introduced as the *saturation* parameter.
+
+The following figures present the actual coverage of each layer for the focus area.
 
 ```{r}
-coverage.areas.1 %>% 
-    filter(area.kind == "Suburban") %>% 
+Fig.4 <- coverage.areas %>% 
   ggplot() +
   geom_sf(aes(col = area.kind), fill = NA) +
-  # facet_grid(cols = vars(area.kind)) +
-  ggtitle("Fig 7: Coverage per layer", subtitle = "Signal density increases with increasing population density")
+  facet_grid(cols = vars(area.kind)) +
+  ggtitle("", subtitle = "Signal density increases with increasing population density") +
+    scale_color_ptol(breaks = c("Rural", "Suburban", "Urban"), "Layer")
+
+plot_grid(Fig.4, labels = "Fig.4: Coverage per layer", 
+          hjust = -0.1, label_size = 12)
 ```
+
+The interpretations of the table above correspond to the level of coverage of each layer. It should be noticed that antennas' coverage areas are allowed to overlap - within antennas of the same tower, as well as across towers of the same or another layer.
+
+```{r}
+# Implement shape of focus area
+Fig.5 <- coverage.areas %>% 
+  ggplot() +
+  geom_sf(aes(col = area.kind), fill = NA) +
+  ggtitle("", subtitle = "Full coverage") +
+    # geom_rect(data = bb.focus.dat, aes(ymin = ymin, ymax = ymax,
+    #                                   xmin = xmin, xmax = xmax),
+    #         color = "black", size = 0.3, alpha = 0.5, fill = alpha("grey", 0)) +
+    scale_color_ptol(breaks = c("Rural", "Suburban", "Urban"), "Layer")
+
+plot_grid(Fig.2.1, Fig.5, labels = "Fig.5: Full coverage corresponding to the density", 
+          hjust = -0.1, label_size = 12)
+```
+
+Add interpretation that coverage follows the pop.area.kind variable
+
+# Device-to-cell association
+
+At this stage we have added to the geographically distributed mobile phone population a radio network, which is setup in three layers, spanning respectively across tiles that correspond to specific area kinds (`pop.area.kind`).
+
+The following module will establish the association between mobile phones of a generic tile to a relevant antenna. The result will be a reference matrix $P$ of size $I x J$, where I denotes the total number of radio cells (antennas), $J$ the total number of tiles and the elements correspond to the probability of the mobile phones of any tile $j$ are registered in the cell $i$. With $P$ one is able to simulate the column vector $c$ (random variable) which describes the total count of mobile phone associated to a radio cell.
+
+Lets assume that $\mathcal{L}_{j}$ denotes the subset of radio cells covering a particular tile (remember, overlapping coverage areas are very common). This means that these respective radio cells are competing with each other to be associated with the cell phones in the tile. We therefore assign probabilities which describe the respective association between a radio cell $i$ and tile $j$. This probability depends on the parameter signal strength which we mimic with a simple linear function that describes the gradual decrease in signal the further away the tile centroid $j$ is from the coverage area centroid of $i$. This means, we calculate the distance between the two centroids and divide it between the radius of that radio cell - it is denoted by $s_{ij}$. We introduce a minimum threshold value $\nu$ which limits radio cells with a too low signal intensity $s_{ij}$ for a particular tile to be able to be picked up a mobile phone in that tile. This particular operationalization of a function modeling the signal strength parameter instead of fixed categorical signal strength values makes the overall workflow of the notebook more realistic (granularity) and more modular as one can later implement very easy even more realistic functions describing the signal strength parameter. The exact operationalization can be found [here](https://github.com/R-ramljak/MNO_GM/blob/master/3_device%20to%20cell.R).
+
+The elements of $P$ - the probability with which the mobile phones within a particular cell are associated with a particular radio cell - are defined by
+
+$$
+p_{ji} = \frac{s_{ij}}{\sum_{i \in \mathcal{L}_{j}} s_{ij}}
+$$
+
+where $s_{ij}$ describes the signal intensity of a particular cell $i$ associated with a particular tile $j$, and $\mathcal{L}_{j}$ describes the subset of radio cells that are covering the tile $j$. We then simulate the tile specific experiments - every mobile phone within a tile will be independently assigned to relevant radio cell with the probability $p_{ij}$. The result is the column vector $c$ which will act as a reference for the later on introduced estimation strategies.
+
+# Estimation strategies
+
+-   Network module: Flat coverage: $p'_{ij} = \frac{1}{|\mathcal{L}_{j}|}$
+
+Estimation strategies:
+
+-   bayes rule: $\hat{u}_{j} = a_{j}\sum_{i = 1}^{I} c_{i} \frac{p_{ij}}{\sum_{k = 1}^{J} p_{ik} a_{k}}$
+
+-   MLE Poisson: $\hat{u}^{m+1}_{j} = \hat{u}^{m}_{j}\sum_{i = 1}^{I} c_{i} \frac{p_{ij}}{\sum_{k = 1}^{J} p_{ik} \hat{u}^{m}_{k}}$
+
+# References
+
+<https://www.destatis.de/EN/Home/_node.html>
+
+<https://github.com/R-ramljak/MNO_GM/blob/master/1_Read%20in%20data.R>
+
+<https://gadm.org/download_country_v3.html>
+
+<https://tma.ifip.org/2016/phdSchool/data/toy_excercise_solution.pdf>
